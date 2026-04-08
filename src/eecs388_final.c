@@ -25,10 +25,28 @@ void auto_brake(int devid)
             uint8_t byteHigh = ser_read(devid);
             //okay rad
             //now let's convert the high and low to a (big endian? number)
-            dist = (byteHigh << 8) | byteLow;
-            ser_print("%d", dist);
+            uint16_t dist = (byteHigh << 8) | byteLow;
+            printf("%d", dist);
             gpio_write(RED_LED, ON);
             //distance calculation complete!
+            gpio_write(RED_LED, OFF);
+            gpio_write(GREEN_LED, OFF);
+            gpio_write(BLUE_LED, OFF);
+            if(dist > 200){
+                gpio_write(GREEN_LED, ON);
+            }
+            else if(dist > 100){
+                gpio_write(BLUE_LED, ON);
+            }
+            else if(dist > 60){
+                gpio_write(RED_LED, ON);
+            }
+            else{
+                gpio_write(RED_LED, ON);
+                delay(100);
+                gpio_write(RED_LED, OFF);
+                delay(100);
+            }
         }
 }
 
