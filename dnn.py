@@ -1,142 +1,194 @@
-#!/usr/bin/env python 
-from __future__ import division
 
+#!/usr/bin/env python
 # Imports
-import tensorflow as tf
-model = __import__("model")
-import cv2
-import sys
-import os
-import time
+import collections
 import math
+import os
+import sys
+import time
+
+import cv2
 import numpy as np
 import serial
+import tensorflow as tf
 
-ser1 = serial.Serial("/dev/ttyAMA1", 115200)
-ser1.write(bytes"ttyAMA1 communication established "))
+try:
+    ser1 = serial.Serial("/dev/ttyAMA1", 115200)
+except:  # can't connect with the first let's go to the second
+    try:
+        ser1 = serial.Serial("/dev/ttyAMA2", 115200)
+    except:
+        raise RuntimeError(
+            "Cannot find serial device to send data to. Intended target machine to run code is RPi 5"
+        )
+
+
+def send_to_hisense(message: str, byteObj: bytes = bytes(0x00)):
+    """Sends a serial string in UTF-8 or a series of bytes objects (access with kwarg byteArray]"""
+    if byteObj != 0: #check if it's the initial kwarg object
+            ser1.write(byteObj)
+    else:
+        ser1.write(bytes(message, "utf-8"))
+
+# Set environment variables for TensorFlow threading
+def set_tf_config(ncpu):
+    os.environ["OMP_NUM_THREADS"] = str(ncpu)
+    os.environ["TF_NUM_INTRAOP_THREADS"] = str(ncpu)
+    os.environ["TF_NUM_INTEROP_THREADS"] = str(ncpu)
+    tf.config.threading.set_inter_op_parallelism_threads(ncpu)
+    tf.config.threading.set_intra_op_parallelism_threads(ncpu)
+    tf.config.set_soft_device_placement(True)
+
+
 # Radian <-> Degree conversion functions
 def deg2rad(deg):
-        return deg * math.pi / 180.0
+    return deg * math.pi / 180.0
+
+
 def rad2deg(rad):
-        return 180.0 * rad / math.pi
+    return 180.0 * rad / math.pi
 
-#Get and set the number of cores to be used by TensorFlow
-if(len(sys.argv) > 1):
-	NCPU = int(sys.argv[1])
+
+# Get the number of cores to be used by TensorFlow
+if len(sys.argv) > 1:
+    NCPU = int(sys.argv[1])
 else:
-	NCPU = 1
-config = tf.ConfigProto(intra_op_parallelism_threads=NCPU, \
-                        inter_op_parallelism_threads=NCPU, \
-                        allow_soft_placement=True, \
-                        device_count = {'CPU': 1})
+    NCPU = 1
 
-#The max number of frames to be processed, 
+send_to_hisense("serial connection established")
+
+
+batch_size = max(16, NCPU * 4)  # Larger batch size to better utilize multiple CPUs
+
+print(f"Using batch size: {batch_size}")
+
+# Set up TensorFlow configuration
+physical_devices = tf.config.list_physical_devices("CPU")
+if len(physical_devices) > 0:
+    tf.config.experimental.set_visible_devices(physical_devices[0], "CPU")
+    print(f"Using CPU device: {physical_devices[0]}")
+
+print(f"Trying to use {NCPU} CPUs")
+set_tf_config(NCPU)
+
+# Import the model
+from model import create_model
+
+# Load the model
+model = create_model(input_shape=(66, 200, 3))
+model.load_weights("model/model.h5")
+
 #    and the number of frames already processed
 NFRAMES = 1000
 curFrame = 0
 
-#Periodic task options
+# Periodic task options
 period = 50
 is_periodic = True
-
-#Load the model
-sess = tf.InteractiveSession(config=config)
-saver = tf.train.Saver()
-model_load_path = "model/model.ckpt"
-saver.restore(sess, model_load_path)
-
-#Create lists for tracking operation timings
+# Create lists for tracking operation timings
 cap_time_list = []
 prep_time_list = []
 pred_time_list = []
 tot_time_list = []
 
-print('---------- Processing video for epoch 1 ----------')
-
-#Open the video file
-vid_path = 'epoch-1.avi'
+print("---------- Processing video for epoch 1 ----------")
+# Open the video file
+vid_path = "epoch-1.avi"
 assert os.path.isfile(vid_path)
 cap = cv2.VideoCapture(vid_path)
 
-#Process the video while recording the operation execution times
-print('performing inference...')
+# Process the video while recording the operation execution times
+print("Performing inference...")
 time_start = time.time()
 first_frame = True
-count = 0
-while(1):
-	if curFrame < NFRAMES:
-		cam_start = time.time()
+count: int = 0
+while curFrame < NFRAMES:
+    batch_frames = []
+    batch_times = []
 
-		#Get the next video frame
-		ret, img = cap.read()
-		if not ret:
-			break
+    # Collect frames for a batch
+    for _ in range(batch_size):
+        if curFrame >= NFRAMES:
+            break
 
-		prep_start = time.time()
+        cam_start = time.time()
+        ret, img = cap.read()
+        if not ret:
+            break
 
-		#Preprocess the input frame
-		img = cv2.resize(img, (200, 66))
-		img = img / 255.
+        prep_start = time.time()
 
-		pred_start = time.time()
+        # Preprocess the input frame
+        img = cv2.resize(img, (200, 66))
+        img = img / 255.0
 
-		#Feed the frame to the model and get the control output
-		rad = model.y.eval(feed_dict={model.x: [img]})[0][0]
-		deg = rad2deg(rad)
-        
-        
-        
-		# Your code goes here in this if statement
-		# The if condition is used to send every 4th
-		# prediction from the model. This is so that
-		# the HiFive can run the other functions in between
-		if count%4 == 0:
-			ser1.write(bytes(f"ANGLE:{deg}"))
-			pass
-			#Your code here.
+        batch_frames.append(img)
+        batch_times.append((cam_start, prep_start))
 
-		
-        
-        
-		pred_end   = time.time()
+    if not batch_frames:
+        break
 
-		#Calculate the timings for each step
-		cam_time  = (prep_start - cam_start)*1000
-		prep_time = (pred_start - prep_start)*1000
-		pred_time = (pred_end - pred_start)*1000
-		tot_time  = (pred_end - cam_start)*1000
+    # Convert list to numpy array for batch prediction
+    batch_input = np.array(batch_frames)
 
-		print('pred: {:0.2f} deg. took: {:0.2f} ms | cam={:0.2f} prep={:0.2f} pred={:0.2f}'.format(deg, tot_time, cam_time, prep_time, pred_time))
-		
-		#Don't include the timings for the first frame due to cache warmup
-		if first_frame:
-			first_frame = False
-		else:
-			tot_time_list.append(tot_time)
-			curFrame += 1
-        
-		#Wait for next period
-		wait_time = (period - tot_time) / 1000
-		if is_periodic and wait_time > 0:
-			time.sleep(wait_time)
-		count += 1
-	else:
-		break
-	
+    # Perform batch prediction
+    pred_start = time.time()
+    predictions = model.predict(batch_input, verbose=1)
+    pred_end = time.time()
+
+    # Process prediction results
+    for i, prediction in enumerate(predictions):
+        if i == 0 and first_frame:
+            first_frame = False
+            continue
+
+        rad = prediction[0]
+        deg = rad2deg(rad)
+
+        cam_start, prep_start = batch_times[i]
+
+        # Calculate the timings for each step
+        cam_time = (prep_start - cam_start) * 1000
+        prep_time = (pred_start - prep_start) * 1000
+
+        # Distribute prediction time proportionally
+        pred_time_per_frame = (pred_end - pred_start) * 1000 / len(batch_frames)
+        pred_time = pred_time_per_frame
+
+        # Total time includes capture, preprocessing, and a portion of prediction
+        tot_time = cam_time + prep_time + pred_time
+
+        print(
+            f"pred: {deg:0.2f} deg. took: {tot_time:0.2f} ms | cam={cam_time:0.2f} prep={prep_time:0.2f} pred={pred_time:0.2f}"
+        )
+
+        # Add timings to lists
+        if not (i == 0 and first_frame):
+            tot_time_list.append(tot_time)
+            curFrame += 1
+        if count % 4 == 0:  # send every four frames
+            deg_bytes = deg.to_bytes(2, byteorder='big', signed=True) #convert to signed big endian
+            send_to_hisense("", bytes([0x06]) + deg_bytes + bytes([0x0A]))
+            # Wait for next period (only for the last frame in batch)
+        if i == len(predictions) - 1 and is_periodic:
+            wait_time = (period - tot_time) / 1000
+            if wait_time > 0:
+                time.sleep(wait_time)
+        count += 1
 cap.release()
 
-#Calculate and output FPS/frequency
+# Calculate and output FPS/frequency
 fps = curFrame / (time.time() - time_start)
-print('completed inference, total frames: {}, average fps: {} Hz'.format(curFrame+1, round(fps, 1)))
+print(
+    "completed inference, total frames: {}, average fps: {} Hz".format(
+        curFrame, round(fps, 1)
+    )
+)
 
-#Calculate and display statistics of the total inferencing times
+# Calculate and display statistics of the total inferencing times
 print("count: {}".format(len(tot_time_list)))
 print("mean: {}".format(np.mean(tot_time_list)))
-print("max: {}".format(np.max(tot_time_list)))
 print("99.999pct: {}".format(np.percentile(tot_time_list, 99.999)))
 print("99.99pct: {}".format(np.percentile(tot_time_list, 99.99)))
 print("99.9pct: {}".format(np.percentile(tot_time_list, 99.9)))
 print("99pct: {}".format(np.percentile(tot_time_list, 99)))
-print("min: {}".format(np.min(tot_time_list)))
-print("median: {}".format(np.median(tot_time_list)))
-print("stdev: {}".format(np.std(tot_time_list)))
