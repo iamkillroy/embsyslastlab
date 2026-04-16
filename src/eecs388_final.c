@@ -55,7 +55,18 @@ int read_from_pi(int devid)
     // Task-3: 
     // You code goes here (Use Lab 09-option1 for reference)
     // After performing Task-2 at dnn.py code, modify this part to read angle values from Raspberry Pi.
-
+    // Conner here writing that read function you asked for
+    if(ser_read(devid) == 'A'){
+        // These might need swapped based on how you set the send protocol
+        highBit = ser_read(devid);
+        lowBit = ser_read(devid);
+    }
+    // Reads the end byte if I heard you correctly last time
+    ser_read();
+    // Combines the two in a 16 bit value
+    uint16_t combBits = (highBit << 8) | lowBit;
+    // Regular return line
+    return combBits;
 }
 
 void steering(int gpio, int pos)
