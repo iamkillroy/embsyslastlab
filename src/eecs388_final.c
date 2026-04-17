@@ -31,12 +31,14 @@ void auto_brake(int devid)
             //distance calculation complete!
             gpio_write(RED_LED, OFF);
             gpio_write(GREEN_LED, OFF);
-            gpio_write(BLUE_LED, OFF);
             if(dist > 200){
                 gpio_write(GREEN_LED, ON);
             }
             else if(dist > 100){
-                gpio_write(BLUE_LED, ON);
+                gpio_write(RED_LED, ON);
+                gpio_write(GREEN_LED, ON);
+
+
             }
             else if(dist > 60){
                 gpio_write(RED_LED, ON);
@@ -55,11 +57,40 @@ int read_from_pi(int devid)
     // Task-3: 
     // You code goes here (Use Lab 09-option1 for reference)
     // After performing Task-2 at dnn.py code, modify this part to read angle values from Raspberry Pi.
+    if (ser_read(devid) == 65){//A
+        //basically sometimes
+        int8_t hi = ser_read(devid);
+        printf("angle is %d", hi);
+        ser_read(devid);
+        return hi;
+    }
+    else{
+        return 0;
+    }
 
+}
+static void servo (int gpio, int angle)
+{
+// YOUR CODE HERE
+// Basically, you need to take the input angle "angle" and generate the corresponding pwm signal
+// To generate the pwm signals, use gpio_write(), delay_us(), and delay_ms().
+    if (angle < 0 || angle > 180){
+        return;
+    }
+    //just exists if we're trying to overload
+    float angleDegreeControl = ((2400-544)/180) * angle ;
+    float dutyCycleDurationinMilisecs = (angleDegreeControl + 544);
+    gpio_write(gpio, ON);
+    delay_usec(dutyCycleDurationinMilisecs);
+    gpio_write(gpio, OFF);
+    delay_usec(20000 - dutyCycleDurationinMilisecs);
+return;
 }
 
 void steering(int gpio, int pos)
 {
+    printf("here, servo is pos %d", pos);
+    servo(gpio, pos);
     // Task-4: 
     // Your code goes here (Use Lab 05 for reference)
     // Check the project document to understand the task
@@ -89,8 +120,9 @@ int main()
     while (1) {
 
         auto_brake(lidar_to_hifive); // measuring distance using lidar and braking
+        printf("l\n");
         int angle = read_from_pi(pi_to_hifive); //getting turn direction from pi
-        printf("\nangle=%d", angle) 
+        printf("\nangle=%d\n", angle) 
         int gpio = PIN_19; 
         for (int i = 0; i < 10; i++){
             // Here, we set the angle to 180 if the prediction from the DNN is a positive angle
